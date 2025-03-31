@@ -17,7 +17,7 @@ Citizen.CreateThread(function()
                             title = 'Không đủ cảnh sát!',
                             description = 'Cần ít nhất ' .. Config.RequiredCops .. ' cảnh sát đang làm nhiệm vụ.',
                             type = 'error',
-                            position = 'top'
+                            position = 'center-left' -- Thay đổi vị trí
                         })
                     end
                 end)
@@ -32,37 +32,25 @@ function OpenCraftingMenu()
     local options = {}
     for _, recipe in ipairs(Config.CraftingRecipes) do
         local ingredientsText = ''
-        for item, amount in pairs(recipe.ingredients) do
-            ingredientsText = ingredientsText .. item .. ': ' .. amount .. ' '
+        for item, data in pairs(recipe.ingredients) do
+            ingredientsText = ingredientsText .. data.label .. ': ' .. data.amount .. ' '
         end
         table.insert(options, {
-            title = 'Điều chế ' .. recipe.result,
+            title = 'Điều chế ' .. recipe.label,
             description = 'Nguyên liệu cho 1: ' .. ingredientsText,
             onSelect = function()
-                lib.inputDialog('Nhập số lượng', {
-                    { 
-                        type = 'number', 
-                        label = 'Số lượng', 
-                        description = 'Nhập số lượng muốn điều chế (tối đa ' .. Config.MaxQuantity .. ')', 
-                        required = true, 
-                        min = 1, 
-                        max = Config.MaxQuantity 
-                    }
-                }, function(input)
-                    if input then
-                        local quantity = tonumber(input[1])
-                        if quantity and quantity > 0 then
-                            TriggerServerEvent('esx_crafting:craftItem', recipe, quantity)
-                        else
-                            lib.notify({
-                                title = 'Lỗi!',
-                                description = 'Số lượng không hợp lệ!',
-                                type = 'error',
-                                position = 'top'
-                            })
-                        end
-                    end
-                end)
+                local quantityOptions = {
+                    { title = '1', onSelect = function() TriggerCraft(recipe, 1) end },
+                    { title = '2', onSelect = function() TriggerCraft(recipe, 2) end },
+                    { title = '5', onSelect = function() TriggerCraft(recipe, 5) end },
+                    { title = '10', onSelect = function() TriggerCraft(recipe, 10) end }
+                }
+                lib.registerContext({
+                    id = 'quantity_menu',
+                    title = 'Chọn số lượng cho ' .. recipe.label,
+                    options = quantityOptions
+                })
+                lib.showContext('quantity_menu')
             end
         })
     end
@@ -73,6 +61,10 @@ function OpenCraftingMenu()
         options = options
     })
     lib.showContext('crafting_menu')
+end
+
+function TriggerCraft(recipe, quantity)
+    TriggerServerEvent('esx_crafting:craftItem', recipe, quantity)
 end
 
 RegisterNetEvent('esx_crafting:freezePlayer')
@@ -87,7 +79,7 @@ AddEventHandler('esx_crafting:freezePlayer', function(recipe, quantity)
 
     lib.progressBar({
         duration = totalTime,
-        label = 'Đang điều chế ' .. recipe.result .. ' (x' .. quantity .. ')',
+        label = 'Đang điều chế ' .. recipe.label .. ' (x' .. quantity .. ')',
         useWhileDead = false,
         canCancel = false,
         disable = {
@@ -100,9 +92,27 @@ AddEventHandler('esx_crafting:freezePlayer', function(recipe, quantity)
     FreezeEntityPosition(ped, false)
     ClearPedTasks(ped)
     DisablePlayerFiring(PlayerId(), false)
+    lib.notify({
+        id = 'crafting_success',
+        title = 'Thành công!',
+        description = 'Bạn đã điều chế ' .. recipe.label .. ' (x' .. quantity .. ')',
+        type = 'success',
+        position = 'center-left' -- Thay đổi vị trí
+    })
 end)
 
 RegisterNetEvent('esx_crafting:playSuccessSound')
 AddEventHandler('esx_crafting:playSuccessSound', function()
     PlaySoundFrontend(-1, 'PURCHASE', 'HUD_LIQUOR_STORE_SOUNDSET', true)
+end)
+
+RegisterNetEvent('esx_crafting:notifyFailure')
+AddEventHandler('esx_crafting:notifyFailure', function(message)
+    lib.notify({
+        id = 'crafting_failed',
+        title = 'Thất bại!',
+        description = message,
+        type = 'error',
+        position = 'center-left' -- Thay đổi vị trí
+    })
 end)
