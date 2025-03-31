@@ -1,5 +1,23 @@
 ESX = exports['es_extended']:getSharedObject()
 
+-- Hàm gửi webhook Discord
+local function sendToDiscord(message)
+    if Config.WebhookURL and Config.WebhookURL ~= 'YOUR_DISCORD_WEBHOOK_URL_HERE' then
+        local embed = {
+            {
+                ["color"] = 16711680, -- Màu đỏ cho thất bại, xanh (65280) cho thành công
+                ["title"] = "Crafting Log",
+                ["description"] = message,
+                ["timestamp"] = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+                ["footer"] = {
+                    ["text"] = "ESX Crafting System"
+                }
+            }
+        }
+        PerformHttpRequest(Config.WebhookURL, function(err, text, headers) end, 'POST', json.encode({embeds = embed}), { ['Content-Type'] = 'application/json' })
+    end
+end
+
 ESX.RegisterServerCallback('esx_crafting:checkCops', function(source, cb)
     local copCount = 0
     for _, playerId in ipairs(ESX.GetPlayers()) do
@@ -15,109 +33,91 @@ local craftingPlayers = {}
 
 RegisterServerEvent('esx_crafting:craftItem')
 AddEventHandler('esx_crafting:craftItem', function(recipe, quantity)
-    local xPlayer = ESX.GetPlayerFromId(source)
-    local inventory = exports.ox_inventory
+    local source = source
+    if not source then return end
 
-    -- Kiểm tra số người đang điều chế
+    local xPlayer = ESX.GetPlayerFromId(source)
+    if not xPlayer then return end
+
+    local inventory = exports.ox_inventory
+    local playerName = xPlayer.getName() or "Unknown"
+
     local currentCraftingCount = 0
     for _ in pairs(craftingPlayers) do
         currentCraftingCount = currentCraftingCount + 1
     end
     if currentCraftingCount >= Config.MaxCraftingPlayers then
-        lib.notify({
-            id = 'crafting_failed',
-            title = 'Thất bại!',
-            description = 'Đã có quá nhiều người đang điều chế tại bàn này! (Tối đa ' .. Config.MaxCraftingPlayers .. ')',
-            type = 'error',
-            position = 'top'
-        }, xPlayer.source)
+        TriggerClientEvent('esx_crafting:notifyFailure', source, 'Đã có quá nhiều người đang điều chế tại bàn này! (Tối đa ' .. Config.MaxCraftingPlayers .. ')')
+        sendToDiscord("Người chơi " .. playerName .. " (ID: " .. source .. ") thất bại khi điều chế " .. recipe.label .. " x" .. quantity .. ": Quá nhiều người điều chế.")
         return
     end
 
-    -- Kiểm tra khoảng cách trước khi bắt đầu
     local playerCoords = GetEntityCoords(GetPlayerPed(source))
     local distance = #(playerCoords - Config.CraftingLocation)
     if distance > Config.MaxDistance then
-        lib.notify({
-            id = 'crafting_failed',
-            title = 'Thất bại!',
-            description = 'Bạn quá xa bàn điều chế!',
-            type = 'error',
-            position = 'top'
-        }, xPlayer.source)
+        TriggerClientEvent('esx_crafting:notifyFailure', source, 'Bạn quá xa bàn điều chế!')
+        sendToDiscord("Người chơi " .. playerName .. " (ID: " .. source .. ") thất bại khi điều chế " .. recipe.label .. " x" .. quantity .. ": Quá xa bàn điều chế.")
         return
     end
 
-    -- Kiểm tra số lượng không vượt quá giới hạn
     if quantity > Config.MaxQuantity then
-        lib.notify({
-            id = 'crafting_failed',
-            title = 'Thất bại!',
-            description = 'Số lượng vượt quá giới hạn tối đa (' .. Config.MaxQuantity .. ')!',
-            type = 'error',
-            position = 'top'
-        }, xPlayer.source)
+        TriggerClientEvent('esx_crafting:notifyFailure', source, 'Số lượng vượt quá giới hạn tối đa (' .. Config.MaxQuantity .. ')!')
+        sendToDiscord("Người chơi " .. playerName .. " (ID: " .. source .. ") thất bại khi điều chế " .. recipe.label .. " x" .. quantity .. ": Số lượng vượt quá giới hạn.")
         return
     end
 
-    -- Kiểm tra nguyên liệu dựa trên số lượng
     local hasIngredients = true
-    for item, amount in pairs(recipe.ingredients) do
-        local requiredAmount = amount * quantity
-        local itemCount = inventory:Search(xPlayer.source, 'count', item) or 0
+    local missingItems = {}
+    for item, data in pairs(recipe.ingredients) do
+        local requiredAmount = data.amount * quantity
+        local itemCount = inventory:Search(source, 'count', item) or 0
         if itemCount < requiredAmount then
             hasIngredients = false
-            break
+            table.insert(missingItems, 'cần ' .. requiredAmount .. ' ' .. data.label)
         end
     end
 
-    -- Kiểm tra trọng lượng kho đồ dựa trên số lượng
-    local canAddItem = inventory:CanCarryItem(xPlayer.source, recipe.result, quantity)
+    local canAddItem = inventory:CanCarryItem(source, recipe.result, quantity)
     if not canAddItem then
-        lib.notify({
-            id = 'crafting_failed',
-            title = 'Thất bại!',
-            description = 'Túi đồ của bạn không đủ chỗ!',
-            type = 'error',
-            position = 'top'
-        }, xPlayer.source)
+        TriggerClientEvent('esx_crafting:notifyFailure', source, 'Túi đồ của bạn không đủ chỗ!')
+        sendToDiscord("Người chơi " .. playerName .. " (ID: " .. source .. ") thất bại khi điều chế " .. recipe.label .. " x" .. quantity .. ": Túi đồ không đủ chỗ.")
         return
     end
 
     if hasIngredients then
-        -- Xóa nguyên liệu dựa trên số lượng
-        for item, amount in pairs(recipe.ingredients) do
-            inventory:RemoveItem(xPlayer.source, item, amount * quantity)
+        for item, data in pairs(recipe.ingredients) do
+            inventory:RemoveItem(source, item, data.amount * quantity)
         end
 
         craftingPlayers[source] = true
+        local resultItem = recipe.result
+        local resultLabel = recipe.label
 
-        TriggerClientEvent('esx_crafting:freezePlayer', xPlayer.source, recipe, quantity)
+        TriggerClientEvent('esx_crafting:freezePlayer', source, recipe, quantity)
 
         local totalTime = recipe.time * quantity
         Citizen.Wait(totalTime)
 
+        xPlayer = ESX.GetPlayerFromId(source)
+        if not xPlayer then
+            craftingPlayers[source] = nil
+            return
+        end
+        inventory = exports.ox_inventory
+
         if craftingPlayers[source] then
-            inventory:AddItem(xPlayer.source, recipe.result, quantity)
-            lib.notify({
-                id = 'crafting_success',
-                title = 'Thành công!',
-                description = 'Bạn đã điều chế ' .. recipe.result .. ' (x' .. quantity .. ')',
-                type = 'success',
-                position = 'top'
-            }, xPlayer.source)
-            TriggerClientEvent('esx_crafting:playSuccessSound', xPlayer.source)
+            local success = inventory:AddItem(source, resultItem, quantity)
+            if success then
+                TriggerClientEvent('esx_crafting:playSuccessSound', source)
+                sendToDiscord("Người chơi " .. playerName .. " (ID: " .. source .. ") đã điều chế thành công " .. resultLabel .. " x" .. quantity .. ".")
+            end
         end
 
         craftingPlayers[source] = nil
     else
-        lib.notify({
-            id = 'crafting_failed',
-            title = 'Thất bại!',
-            description = 'Bạn không đủ nguyên liệu',
-            type = 'error',
-            position = 'top'
-        }, xPlayer.source)
+        local missingMessage = 'Bạn không đủ nguyên liệu: ' .. table.concat(missingItems, ', ')
+        TriggerClientEvent('esx_crafting:notifyFailure', source, missingMessage)
+        sendToDiscord("Người chơi " .. playerName .. " (ID: " .. source .. ") thất bại khi điều chế " .. recipe.label .. " x" .. quantity .. ": " .. missingMessage .. ".")
     end
 end)
 
